@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Private Chat</title>
+
+  <!-- REQUIRED for mobile -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div id="login">
+  <div class="title">PRIVATE CHAT V1.0</div>
+
+  <label>user@chat:~$</label>
+  <select id="username">
+    <option value="user1">user1</option>
+    <option value="user2">user2</option>
+  </select>
+
+  <label>secret@code:~$</label>
+  <input id="code" />
+
+  <button onclick="joinRoom()">[ CONNECT ]</button>
+  <p id="error"></p>
+</div>
+
+<div id="chat" class="hidden">
+  <div class="top">
+    <span id="status"></span>
+    <button onclick="logout()">LOGOUT</button>
+  </div>
+
+  <div id="messages"></div>
+  <div id="typing"></div>
+
+  <input id="message" placeholder="type message..." />
+  <button onclick="sendMessage()">SEND</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="crypto.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
