@@ -4,6 +4,7 @@ const Crypt = (() => {
   const enc = new TextEncoder();
   const dec = new TextDecoder();
   let key = null;
+  let rawBits = null;
 
   const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
   const b64 = (buf) => {
@@ -22,9 +23,18 @@ const Crypt = (() => {
       base,
       512
     );
+    return useBits(bits);
+  }
+
+  async function useBits(bits) {
+    rawBits = bits;
     key = await crypto.subtle.importKey("raw", bits.slice(32), "AES-GCM", false, ["encrypt", "decrypt"]);
     return hex(bits.slice(0, 32));
   }
+
+  // Lets the app survive the OS reloading the page while backgrounded (kept in sessionStorage, cleared on lock).
+  const exportSession = () => (rawBits ? b64(rawBits) : null);
+  const restoreSession = (s) => useBits(unb64(s).buffer);
 
   async function encrypt(obj) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -41,7 +51,7 @@ const Crypt = (() => {
     return JSON.parse(dec.decode(pt));
   }
 
-  const wipe = () => { key = null; };
+  const wipe = () => { key = null; rawBits = null; };
 
-  return { deriveKeys, encrypt, decrypt, wipe };
+  return { deriveKeys, encrypt, decrypt, wipe, exportSession, restoreSession };
 })();

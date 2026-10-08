@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const socket = io({ transports: ["websocket"] });
 
 const MESSAGE_TTL = 5 * 60 * 1000;
-const IDLE_LOCK = 3 * 60 * 1000;
+const IDLE_LOCK = 15 * 60 * 1000; // auto-lock after this much inactivity (also checked on return from background)
 const MAX_VOICE_MS = 60 * 1000;
 const MAX_IMG_DIM = 1280;
 
@@ -13,6 +13,11 @@ let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 let typingTimeout;
 let idleTimer;
 let connecting = false;
+let roomId = null;
+let wasJoined = false;
+let lastActive = Date.now();
+let cid = (() => { const a = crypto.getRandomValues(new Uint8Array(16)); return [...a].map((b) => b.toString(16).padStart(2, "0")).join(""); })();
+const SESSION_KEY = "pc-session";
 
 const initial = (n) => (n.trim()[0] || "?").toUpperCase();
 const inChat = () => !$("chat").classList.contains("hidden");
@@ -39,10 +44,10 @@ $("loginForm").addEventListener("submit", async (e) => {
   $("error").textContent = "";
   $("connect").textContent = "Securing…";
   try {
-    const roomId = await Crypt.deriveKeys(pass);
+    roomId = await Crypt.deriveKeys(pass);
     myName = name;
     $("pass").value = "";
-    socket.emit("join", roomId);
+    socket.emit("join", { room: roomId, cid });
   } catch (err) {
     fail(err.message);
   }
@@ -54,14 +59,32 @@ function fail(msg) {
   $("connect").textContent = "Connect";
   $("error").textContent = msg;
 }
-socket.on("error-msg", fail);
+socket.on("error-msg", (msg) => {
+  if (wasJoined && inChat()) return toast(msg);
+  wasJoined = false; // a failed restore falls back to the normal login screen
+  try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+  fail(msg);
+});
 
 socket.on("joined", (info) => {
   if (info && Array.isArray(info.ice)) iceServers = info.ice;
   $("login").classList.add("hidden");
   $("chat").classList.remove("hidden");
-  $("message").focus();
-  resetIdle();
+  if (!wasJoined) $("message").focus();
+  wasJoined = true;
+  touch();
+  saveSession();
+});
+
+// Phones suspend the connection when you switch apps. Quietly rejoin the room when it comes back.
+socket.on("connect", () => {
+  if (wasJoined && roomId) socket.emit("join", { room: roomId, cid });
+});
+socket.on("disconnect", () => {
+  if (!wasJoined) return;
+  peerOnline = false;
+  $("status").classList.remove("online");
+  $("statusText").textContent = "Reconnecting…";
 });
 
 socket.on("presence", ({ count }) => {
@@ -69,7 +92,7 @@ socket.on("presence", ({ count }) => {
   $("status").classList.toggle("online", peerOnline);
   $("statusText").textContent = peerOnline ? "Online" : "Partner offline";
   if (peerOnline) announce();
-  else if (call.state !== "idle") endCall(false, "Partner disconnected");
+  else if (call.state !== "idle" && call.state !== "live") endCall(false, "Partner disconnected");
 });
 
 /* ---------------- messaging ---------------- */
@@ -85,7 +108,7 @@ $("composer").addEventListener("submit", async (e) => {
   socket.emit("stop-typing");
   addRow(textBubble(text), true);
   await send({ k: "msg", n: myName, t: text });
-  resetIdle();
+  touch();
 });
 
 socket.on("receive-message", async (payload) => {
@@ -150,7 +173,7 @@ $("file").addEventListener("change", async () => {
     await send({ k: "img", n: myName, d, once });
     if (once) addRow(onceBubble(null, true), true);
     else addRow(photoBubble(d), true);
-    resetIdle();
+    touch();
   } catch {
     toast("Couldn't send photo");
   }
@@ -244,7 +267,7 @@ $("mic").addEventListener("click", async () => {
       const d = await blobToDataUrl(blob);
       await send({ k: "aud", n: myName, d, m: mr.mimeType });
       addRow(audioBubble(blob), true);
-      resetIdle();
+      touch();
     };
     mr.start();
     $("mic").classList.add("rec");
@@ -483,18 +506,54 @@ $("flipBtn").addEventListener("click", async () => {
 function lock() {
   try { endCall(true); socket.emit("logout"); } catch {}
   Crypt.wipe();
+  try { sessionStorage.removeItem(SESSION_KEY); } catch {}
   location.reload();
 }
 $("logout").addEventListener("click", lock);
 
-function resetIdle() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => (call.state === "live" ? resetIdle() : lock()), IDLE_LOCK);
+// Inactivity is measured with the wall clock so it is still correct after the phone suspended our timers.
+function touch() { lastActive = Date.now(); }
+function checkIdle() {
+  if (!inChat() || call.state === "live") return;
+  if (Date.now() - lastActive > IDLE_LOCK) lock();
 }
-["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, () => inChat() && resetIdle(), { passive: true }));
+setInterval(checkIdle, 30 * 1000);
+
+let lastSave = 0;
+function saveSession() {
+  try {
+    const b = Crypt.exportSession();
+    if (b) sessionStorage.setItem(SESSION_KEY, JSON.stringify({ b, n: myName, cid, ts: Date.now() }));
+    lastSave = Date.now();
+  } catch {}
+}
+["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, () => {
+  if (!inChat()) return;
+  touch();
+  if (Date.now() - lastSave > 10000) saveSession();
+}, { passive: true }));
 
 // Hide content in app switcher; don't shield during a call so video keeps showing.
 const shield = (on) => document.body.classList.toggle("shielded", on && call.state !== "live");
-document.addEventListener("visibilitychange", () => shield(document.hidden));
+document.addEventListener("visibilitychange", () => {
+  shield(document.hidden);
+  if (!document.hidden) checkIdle();
+});
 window.addEventListener("blur", () => shield(true));
-window.addEventListener("focus", () => shield(false));
+window.addEventListener("focus", () => { shield(false); checkIdle(); });
+
+// If the OS reloaded the page while it was in the background, pick up where we left off (within the idle window).
+(async function restore() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (!s || Date.now() - s.ts > IDLE_LOCK) return sessionStorage.removeItem(SESSION_KEY);
+    roomId = await Crypt.restoreSession(s.b);
+    myName = s.n;
+    cid = s.cid;
+    wasJoined = true;
+    const go = () => socket.emit("join", { room: roomId, cid });
+    socket.connected ? go() : socket.once("connect", go);
+  } catch { try { sessionStorage.removeItem(SESSION_KEY); } catch {} }
+})();

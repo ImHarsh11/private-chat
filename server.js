@@ -84,7 +84,8 @@ function iceServers() {
 
 // ---- rooms ------------------------------------------------------------------
 // The server only ever sees a hash-derived room id and AES-GCM ciphertext.
-const rooms = new Map(); // roomId -> Set<socketId>
+const rooms = new Map(); // roomId -> Map<socketId, clientId>
+const CLIENT_ID_RE = /^[0-9a-f]{32}$/;
 
 function presence(roomId) {
   io.to(roomId).emit("presence", { count: rooms.get(roomId)?.size || 0 });
@@ -112,8 +113,10 @@ io.on("connection", (socket) => {
   let sigBurst = 0;
   let lastSig = 0;
 
-  socket.on("join", (roomId) => {
+  socket.on("join", (req) => {
     if (socket.roomId) return;
+    const roomId = req && req.room;
+    const cid = req && req.cid;
     if (isBlocked(ip)) return socket.emit("error-msg", "Too many attempts. Try again later.");
     if (typeof roomId !== "string" || !ROOM_ID_RE.test(roomId)) {
       recordFailure(ip);
@@ -123,13 +126,25 @@ io.on("connection", (socket) => {
       recordFailure(ip);
       return socket.emit("error-msg", "Access denied");
     }
+    if (typeof cid !== "string" || !CLIENT_ID_RE.test(cid)) {
+      recordFailure(ip);
+      return socket.emit("error-msg", "Access denied");
+    }
     let set = rooms.get(roomId);
-    if (!set) { set = new Set(); rooms.set(roomId, set); }
+    if (!set) { set = new Map(); rooms.set(roomId, set); }
+    // Same device coming back (phone woke up / network switched): drop its stale connection and reuse the seat.
+    for (const [sid, c] of [...set]) {
+      if (c === cid && sid !== socket.id) {
+        const old = io.sockets.sockets.get(sid);
+        if (old) { leave(old); old.disconnect(true); } else set.delete(sid);
+      }
+    }
+    if (!rooms.has(roomId)) rooms.set(roomId, set);
     if (set.size >= MAX_SEATS) {
       recordFailure(ip);
       return socket.emit("error-msg", "Access denied");
     }
-    set.add(socket.id);
+    set.set(socket.id, cid);
     socket.roomId = roomId;
     socket.join(roomId);
     socket.emit("joined", { ice: iceServers() });

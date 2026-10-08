@@ -171,3 +171,7 @@ header { gap: 8px; }
 #localVideo.off { display: none; }
 #viewer { z-index: 30; background: #000; }
 #viewer img { max-width: 100%; max-height: 85dvh; object-fit: contain; }
+
+/* Muted / camera-off: show a crossed-out icon */
+.call-btn .slash { display: none; stroke-width: 2.6; }
+.call-btn.off .slash { display: block; }
