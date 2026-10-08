@@ -30,6 +30,22 @@ function toast(msg) {
 }
 
 /* ---------------- login ---------------- */
+$("showPass").addEventListener("click", () => {
+  const show = $("pass").type === "password";
+  $("pass").type = show ? "text" : "password";
+  $("showPass").textContent = show ? "Hide" : "Show";
+});
+// ~100 bits of randomness: share it with her once, privately (in person is best).
+$("genPass").addEventListener("click", async () => {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const chars = [...bytes].map((b) => alphabet[b % alphabet.length]);
+  const p = [0, 5, 10, 15].map((i) => chars.slice(i, i + 5).join("")).join("-");
+  $("pass").value = p;
+  $("pass").type = "text";
+  $("showPass").textContent = "Hide";
+  try { await navigator.clipboard.writeText(p); toast("Copied — send it to her privately"); } catch { toast("Write it down and share it privately"); }
+});
 $("loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (connecting) return;
@@ -83,27 +99,61 @@ socket.on("connect", () => {
 socket.on("disconnect", () => {
   if (!wasJoined) return;
   peerOnline = false;
-  $("status").classList.remove("online");
-  $("statusText").textContent = "Reconnecting…";
+  Crypt.resetSession();
+  renderStatus("Reconnecting…");
 });
 
-socket.on("presence", ({ count }) => {
+socket.on("presence", async ({ count }) => {
+  const was = peerOnline;
   peerOnline = count > 1;
-  $("status").classList.toggle("online", peerOnline);
-  $("statusText").textContent = peerOnline ? "Online" : "Partner offline";
-  if (peerOnline) announce();
-  else if (call.state !== "idle" && call.state !== "live") endCall(false, "Partner disconnected");
+  if (!peerOnline) {
+    Crypt.resetSession(); // forget the session keys as soon as she leaves
+    renderStatus("Partner offline");
+    if (call.state !== "idle" && call.state !== "live") endCall(false, "Partner disconnected");
+  } else if (!was) {
+    renderStatus("Securing…");
+    sendKx(); // fresh keys for every session
+  }
 });
+
+async function sendKx() {
+  try { socket.emit("send-message", await Crypt.kxMessage()); } catch {}
+}
+
+// Status line + composer state in one place.
+function renderStatus(text) {
+  const secure = peerOnline && Crypt.isSecure();
+  $("status").classList.toggle("online", secure);
+  $("statusText").textContent = secure ? "Online" : text || (peerOnline ? "Securing…" : "Partner offline");
+  $("verifyBtn").classList.toggle("hidden", !secure);
+  $("message").placeholder = secure ? "Message" : peerOnline ? "Securing connection…" : "Waiting for her to come online…";
+}
+
+// Messages are never queued: if she's offline nothing is delivered, so say so instead of pretending.
+function canSend() {
+  if (!socket.connected) { toast("Reconnecting…"); return false; }
+  if (!peerOnline) { toast("She's offline — not sent"); return false; }
+  if (!Crypt.isSecure()) { toast("Still securing the connection…"); return false; }
+  return true;
+}
+
+socket.on("alert", () => {
+  $("alertBar").classList.remove("hidden");
+  navigator.vibrate && navigator.vibrate([200, 100, 200]);
+});
+$("alertClose").addEventListener("click", () => $("alertBar").classList.add("hidden"));
 
 /* ---------------- messaging ---------------- */
 const send = async (obj) => socket.emit("send-message", await Crypt.encrypt(obj));
-const sendSignal = async (obj) => socket.emit("signal", await Crypt.encrypt(obj));
+const sendSignal = async (obj) => {
+  try { socket.emit("signal", await Crypt.encrypt(obj)); } catch {}
+};
 const announce = () => send({ k: "hello", n: myName });
 
 $("composer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("message").value.trim();
-  if (!text) return;
+  if (!text || !canSend()) return;
   $("message").value = "";
   socket.emit("stop-typing");
   addRow(textBubble(text), true);
@@ -112,8 +162,16 @@ $("composer").addEventListener("submit", async (e) => {
 });
 
 socket.on("receive-message", async (payload) => {
+  if (typeof payload === "string" && payload[0] === "{") {
+    // Key exchange message (signed with the passphrase, so the server can't forge it).
+    const r = await Crypt.handleKx(payload).catch(() => null);
+    if (!r) return;
+    if (r.reply) await sendKx();
+    if (r.secure) { renderStatus(); announce(); }
+    return;
+  }
   let m;
-  try { m = await Crypt.decrypt(payload); } catch { return; } // wrong key / tampered: drop
+  try { m = await Crypt.decrypt(payload); } catch { return; } // wrong key / tampered / replayed / reflected: drop
   if (!m || typeof m !== "object") return;
   if (typeof m.n === "string") {
     const n = m.n.slice(0, 24);
@@ -124,6 +182,7 @@ socket.on("receive-message", async (payload) => {
     if (m.k === "hello" && fresh) announce();
   }
   if (m.k === "msg" && typeof m.t === "string") addRow(textBubble(m.t.slice(0, 2000)), false);
+  else if (m.k === "wipe") clearAll();
   else if (m.k === "img") receiveImage(m);
   else if (m.k === "aud") receiveAudio(m);
 });
@@ -145,13 +204,54 @@ function addRow(item, mine) {
   row.append(item.el, time);
   $("messages").appendChild(row);
   $("messages").scrollTop = $("messages").scrollHeight;
-  const remove = () => {
-    row.classList.add("gone");
-    setTimeout(() => { row.remove(); item.cleanup && item.cleanup(); }, 400);
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    row.remove();
+    item.cleanup && item.cleanup();
+    rows.delete(finish);
   };
-  setTimeout(remove, MESSAGE_TTL);
-  return { row, remove };
+  rows.add(finish);
+  setTimeout(() => {
+    row.classList.add("gone");
+    setTimeout(finish, 400);
+  }, MESSAGE_TTL);
+  return { row, finish };
 }
+const rows = new Set();
+
+// Wipe every message from the screen and memory right now.
+function clearAll() {
+  [...rows].forEach((f) => f());
+  $("messages").textContent = "";
+  $("viewer").classList.add("hidden");
+  $("viewerImg").removeAttribute("src");
+}
+
+// "Clear for both": first tap arms the button, second tap wipes both phones.
+let clearArmed = null;
+$("clearBtn").addEventListener("click", async () => {
+  if (!clearArmed) {
+    $("clearBtn").classList.add("armed");
+    toast("Tap again to clear this chat on both phones");
+    clearArmed = setTimeout(() => { clearArmed = null; $("clearBtn").classList.remove("armed"); }, 3000);
+    return;
+  }
+  clearTimeout(clearArmed); clearArmed = null;
+  $("clearBtn").classList.remove("armed");
+  clearAll();
+  if (peerOnline && Crypt.isSecure()) await send({ k: "wipe", n: myName });
+});
+
+// Security code: if both phones show the same digits, nobody is in the middle.
+$("verifyBtn").addEventListener("click", () => {
+  const code = Crypt.safetyCode();
+  if (!code) return;
+  $("codeText").textContent = code;
+  $("codeSheet").classList.remove("hidden");
+});
+$("codeClose").addEventListener("click", () => $("codeSheet").classList.add("hidden"));
 
 $("message").addEventListener("input", () => {
   socket.emit("typing");
@@ -162,14 +262,23 @@ socket.on("typing", () => { $("typing").textContent = `${peerName || "Partner"} 
 socket.on("stop-typing", () => { $("typing").textContent = ""; });
 
 /* ---------------- photos ---------------- */
-$("attach").addEventListener("click", () => $("file").click());
+let viewOnce = false;
+$("onceBtn").addEventListener("click", () => {
+  viewOnce = !viewOnce;
+  $("onceBtn").classList.toggle("on", viewOnce);
+  toast(viewOnce ? "Next photo: view once" : "Photos stay in the chat");
+});
+$("attach").addEventListener("click", () => { if (canSend()) $("file").click(); });
 $("file").addEventListener("change", async () => {
   const f = $("file").files[0];
   $("file").value = "";
   if (!f || !f.type.startsWith("image/")) return;
   try {
     const d = await shrinkImage(f);
-    const once = confirm("Send as view-once photo?\n\nOK = disappears after she opens it\nCancel = normal photo");
+    if (!canSend()) return;
+    const once = viewOnce;
+    viewOnce = false;
+    $("onceBtn").classList.remove("on");
     await send({ k: "img", n: myName, d, once });
     if (once) addRow(onceBubble(null, true), true);
     else addRow(photoBubble(d), true);
@@ -249,6 +358,7 @@ let rec = null;
 
 $("mic").addEventListener("click", async () => {
   if (rec) return stopRecording(true);
+  if (!canSend()) return;
   if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Voice notes not supported here");
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -265,6 +375,7 @@ $("mic").addEventListener("click", async () => {
       if (!r.send || !r.chunks.length) return;
       const blob = new Blob(r.chunks, { type: mr.mimeType });
       const d = await blobToDataUrl(blob);
+      if (!canSend()) return;
       await send({ k: "aud", n: myName, d, m: mr.mimeType });
       addRow(audioBubble(blob), true);
       touch();
@@ -503,8 +614,11 @@ $("flipBtn").addEventListener("click", async () => {
 });
 
 /* ---------------- lock / privacy ---------------- */
-function lock() {
-  try { endCall(true); socket.emit("logout"); } catch {}
+async function lock() {
+  try {
+    if (call.state !== "idle") { endCall(true); await new Promise((r) => setTimeout(r, 200)); }
+    socket.emit("logout");
+  } catch {}
   Crypt.wipe();
   try { sessionStorage.removeItem(SESSION_KEY); } catch {}
   location.reload();

@@ -175,3 +175,30 @@ header { gap: 8px; }
 /* Muted / camera-off: show a crossed-out icon */
 .call-btn .slash { display: none; stroke-width: 2.6; }
 .call-btn.off .slash { display: block; }
+
+/* Security features */
+.pass-row { position: relative; }
+.pass-row input { padding-right: 64px; }
+.link-btn { background: none; border: 0; color: var(--blue); font-size: 14px; cursor: pointer; padding: 6px; }
+.pass-row .link-btn { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); }
+.link-btn.gen { display: block; margin: 8px 0 0; padding-left: 0; }
+.link-btn.big { margin-top: 36px; font-size: 18px; }
+#clearBtn.armed { background: #ef4444; border-color: #ef4444; }
+.round-btn.small { width: 34px; height: 34px; font-size: 12px; font-weight: 700; align-self: center; }
+.round-btn.on { background: var(--blue); color: #fff; }
+#alertBar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 8px; border-radius: 14px;
+  background: rgba(239,68,68,.18); border: 1px solid rgba(239,68,68,.5); font-size: 14px;
+}
+#alertBar.hidden { display: none; }
+#alertBar span { flex: 1; }
+#alertBar button { background: none; border: 0; color: var(--text); font-size: 16px; cursor: pointer; }
+#codeText { font-size: 28px; font-weight: 600; letter-spacing: .06em; line-height: 1.7; max-width: 300px; margin-top: 20px; font-variant-numeric: tabular-nums; -webkit-user-select: text; user-select: text; }
+.code-help { max-width: 320px; }
+
+/* Header holds five buttons: keep it compact on narrow phones */
+header { gap: 6px; padding: 8px 10px; }
+header .icon-btn { width: 34px; height: 34px; border-radius: 12px; }
+header .icon-btn svg { width: 18px; height: 18px; }
+.who { margin-right: 2px; }
+#status { white-space: nowrap; }
