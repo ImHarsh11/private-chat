@@ -1,44 +1,64 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Private Chat</title>
-
-  <!-- REQUIRED for mobile -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
+  <meta charset="utf-8">
+  <title>CH</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CH">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
 
-<div id="login">
-  <div class="title">PRIVATE CHAT V1.0</div>
+<main id="login" class="screen">
+  <img class="logo" src="icon-512.png" alt="CH" width="96" height="96">
+  <h1>Private chat</h1>
+  <p class="sub">End-to-end encrypted. Just the two of you.</p>
 
-  <label>user@chat:~$</label>
-  <select id="username">
-    <option value="user1">user1</option>
-    <option value="user2">user2</option>
-  </select>
+  <form id="loginForm" autocomplete="off">
+    <label for="name">Your name</label>
+    <input id="name" maxlength="24" autocomplete="off" autocapitalize="words" spellcheck="false" required>
 
-  <label>secret@code:~$</label>
-  <input id="code" />
+    <label for="pass">Shared passphrase</label>
+    <input id="pass" type="password" minlength="14" autocomplete="off" autocapitalize="off" spellcheck="false" required>
 
-  <button onclick="joinRoom()">[ CONNECT ]</button>
-  <p id="error"></p>
-</div>
+    <button id="connect" type="submit">Connect</button>
+    <p id="error" role="alert"></p>
+  </form>
+  <p class="hint">Messages vanish after 5 minutes and are never stored. Closing the app wipes the key.</p>
+</main>
 
-<div id="chat" class="hidden">
-  <div class="top">
-    <span id="status"></span>
-    <button onclick="logout()">LOGOUT</button>
-  </div>
+<main id="chat" class="screen hidden">
+  <header>
+    <div class="avatar" id="peerAvatar">?</div>
+    <div class="who">
+      <strong id="peerName">Waiting…</strong>
+      <span id="status"><i class="dot"></i><span id="statusText">Partner offline</span></span>
+    </div>
+    <span class="chip" title="Messages disappear">5m</span>
+    <button id="logout" class="icon-btn" aria-label="Lock">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="3"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    </button>
+  </header>
 
   <div id="messages"></div>
   <div id="typing"></div>
 
-  <input id="message" placeholder="type message..." />
-  <button onclick="sendMessage()">SEND</button>
-</div>
+  <form id="composer" autocomplete="off">
+    <input id="message" placeholder="Message" maxlength="2000" autocomplete="off" autocorrect="on" enterkeyhint="send">
+    <button id="send" type="submit" aria-label="Send">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+    </button>
+  </form>
+  <div id="privacyShield">Locked while hidden</div>
+</main>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="crypto.js"></script>
