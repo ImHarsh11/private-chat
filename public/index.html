@@ -1,44 +1,93 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Private Chat</title>
-
-  <!-- REQUIRED for mobile -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
+  <meta charset="utf-8">
+  <title>CH</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CH">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
 
-<div id="login">
-  <div class="title">PRIVATE CHAT V1.0</div>
+<main id="login" class="screen">
+  <img class="logo" src="icon-512.png" alt="CH" width="96" height="96">
+  <h1>Private chat</h1>
+  <p class="sub">End-to-end encrypted. Just the two of you.</p>
 
-  <label>user@chat:~$</label>
-  <select id="username">
-    <option value="user1">user1</option>
-    <option value="user2">user2</option>
-  </select>
+  <form id="loginForm" autocomplete="off">
+    <label for="name">Your name</label>
+    <input id="name" maxlength="24" autocomplete="off" autocapitalize="words" spellcheck="false" required>
 
-  <label>secret@code:~$</label>
-  <input id="code" />
+    <label for="pass">Shared passphrase</label>
+    <input id="pass" type="password" minlength="14" autocomplete="off" autocapitalize="off" spellcheck="false" required>
 
-  <button onclick="joinRoom()">[ CONNECT ]</button>
-  <p id="error"></p>
-</div>
+    <button id="connect" type="submit">Connect</button>
+    <p id="error" role="alert"></p>
+  </form>
+  <p class="hint">Messages vanish after 5 minutes and are never stored. Closing the app wipes the key.</p>
+</main>
 
-<div id="chat" class="hidden">
-  <div class="top">
-    <span id="status"></span>
-    <button onclick="logout()">LOGOUT</button>
-  </div>
+<main id="chat" class="screen hidden">
+  <header>
+    <div class="avatar" id="peerAvatar">?</div>
+    <div class="who">
+      <strong id="peerName">Waiting…</strong>
+      <span id="status"><i class="dot"></i><span id="statusText">Partner offline</span></span>
+    </div>
+    <button id="voiceCall" class="icon-btn" aria-label="Voice call"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg></button>
+    <button id="videoCall" class="icon-btn" aria-label="Video call"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="3"/><path d="M16 10l6-3v10l-6-3"/></svg></button>
+    <button id="logout" class="icon-btn" aria-label="Lock">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="3"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    </button>
+  </header>
 
   <div id="messages"></div>
   <div id="typing"></div>
 
-  <input id="message" placeholder="type message..." />
-  <button onclick="sendMessage()">SEND</button>
+  <form id="composer" autocomplete="off">
+    <button id="attach" type="button" class="round-btn" aria-label="Send photo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="1.6"/><path d="M21 15l-5-5L5 21"/></svg></button>
+    <input id="file" type="file" accept="image/*" class="hidden">
+    <input id="message" placeholder="Message" maxlength="2000" autocomplete="off" autocorrect="on" enterkeyhint="send">
+    <button id="mic" type="button" class="round-btn" aria-label="Record voice note"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg></button>
+    <button id="send" type="submit" aria-label="Send">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+    </button>
+  </form>
+  <div id="toast" role="status"></div>
+  <div id="privacyShield">Locked while hidden</div>
+</main>
+
+<div id="incoming" class="overlay hidden">
+  <div class="avatar big" id="incAvatar">?</div>
+  <h2 id="incName">Incoming call</h2>
+  <p id="incKind">Video call</p>
+  <div class="call-row">
+    <button id="decline" class="call-btn red" aria-label="Decline"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 9c-3.3 0-6.4 1-8.6 2.8a1.5 1.5 0 0 0-.1 2.2l1.6 1.6a1.5 1.5 0 0 0 1.8.2l2.3-1.3c.4-.2.7-.7.7-1.1V11c1.4-.4 2.9-.4 4.4 0v1.4c0 .4.3.9.7 1.1l2.3 1.3c.6.3 1.3.2 1.8-.2l1.6-1.6a1.5 1.5 0 0 0-.1-2.2C18.4 10 15.3 9 12 9z"/></svg></button>
+    <button id="accept" class="call-btn green" aria-label="Accept"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg></button>
+  </div>
 </div>
+
+<div id="call" class="overlay hidden">
+  <video id="remoteVideo" autoplay playsinline></video>
+  <div id="callInfo"><div class="avatar big" id="callAvatar">?</div><h2 id="callName"></h2><p id="callState">Calling…</p></div>
+  <video id="localVideo" autoplay playsinline muted></video>
+  <div class="call-row bottom">
+    <button id="muteBtn" class="call-btn" aria-label="Mute"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg></button>
+    <button id="camBtn" class="call-btn" aria-label="Camera"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="3"/><path d="M16 10l6-3v10l-6-3"/></svg></button>
+    <button id="flipBtn" class="call-btn" aria-label="Flip camera"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></button>
+    <button id="hangup" class="call-btn red" aria-label="End call"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 9c-3.3 0-6.4 1-8.6 2.8a1.5 1.5 0 0 0-.1 2.2l1.6 1.6a1.5 1.5 0 0 0 1.8.2l2.3-1.3c.4-.2.7-.7.7-1.1V11c1.4-.4 2.9-.4 4.4 0v1.4c0 .4.3.9.7 1.1l2.3 1.3c.6.3 1.3.2 1.8-.2l1.6-1.6a1.5 1.5 0 0 0-.1-2.2C18.4 10 15.3 9 12 9z"/></svg></button>
+  </div>
+</div>
+
+<div id="viewer" class="overlay hidden"><img id="viewerImg" alt=""><p>Tap to close</p></div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="crypto.js"></script>
