@@ -118,3 +118,56 @@ header {
   background: var(--bg); color: var(--muted);
 }
 body.shielded #privacyShield { display: grid; }
+
+/* Composer extras */
+.round-btn {
+  width: 42px; height: 42px; flex: none; border: 0; border-radius: 50%; cursor: pointer;
+  background: rgba(255,255,255,.07); color: var(--text); display: grid; place-items: center;
+}
+.round-btn.rec { background: #ef4444; animation: pulse 1.2s infinite; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(239,68,68,.2); } }
+header .icon-btn { width: 38px; height: 38px; }
+header { gap: 8px; }
+#toast {
+  position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); padding: 10px 16px; border-radius: 999px;
+  background: rgba(30,34,46,.95); border: 1px solid var(--line); font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 5;
+}
+#toast.show { opacity: 1; }
+
+/* Media bubbles */
+.bubble.media { padding: 4px; }
+.bubble img.photo { display: block; max-width: min(260px, 100%); max-height: 320px; border-radius: 16px; cursor: pointer; }
+.bubble audio { width: 220px; max-width: 100%; height: 40px; }
+.bubble.once { cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.bubble.once.opened { opacity: .55; cursor: default; }
+
+/* Overlays */
+.overlay {
+  position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(800px 500px at 50% 0, rgba(59,130,246,.3), transparent 60%), #07080c; text-align: center;
+  padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+}
+.overlay h2 { margin: 14px 0 4px; font-size: 26px; }
+.overlay p { color: var(--muted); margin: 0; }
+.avatar.big { width: 110px; height: 110px; font-size: 44px; }
+.call-row { display: flex; gap: 22px; margin-top: 50px; }
+.call-row.bottom { position: absolute; bottom: max(36px, env(safe-area-inset-bottom)); margin: 0; gap: 16px; }
+.call-btn {
+  width: 62px; height: 62px; border-radius: 50%; border: 0; cursor: pointer; color: #fff;
+  background: rgba(255,255,255,.14); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  display: grid; place-items: center;
+}
+.call-btn.off { background: #fff; color: #111; }
+.call-btn.red { background: #ef4444; box-shadow: 0 0 24px rgba(239,68,68,.5); }
+.call-btn.green { background: #22c55e; box-shadow: 0 0 24px rgba(34,197,94,.5); animation: pulse 1.4s infinite; }
+#remoteVideo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+#remoteVideo.off { display: none; }
+#callInfo { position: relative; z-index: 1; }
+#callInfo.live.video { display: none; }
+#localVideo {
+  position: absolute; top: max(16px, env(safe-area-inset-top)); right: 16px; width: 96px; height: 136px; object-fit: cover;
+  border-radius: 16px; border: 1px solid var(--line); background: #111; transform: scaleX(-1); z-index: 2;
+}
+#localVideo.off { display: none; }
+#viewer { z-index: 30; background: #000; }
+#viewer img { max-width: 100%; max-height: 85dvh; object-fit: contain; }

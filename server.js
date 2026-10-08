@@ -6,7 +6,8 @@ const app = express();
 app.set("trust proxy", 1);
 const server = http.createServer(app);
 
-const MAX_PAYLOAD_BYTES = 16 * 1024;
+const MAX_PAYLOAD_BYTES = 2 * 1024 * 1024; // photos / voice notes (encrypted, base64)
+const MAX_SIGNAL_BYTES = 16 * 1024;
 const MAX_SEATS = 2;
 const ROOM_ID_RE = /^[0-9a-f]{64}$/;
 
@@ -17,7 +18,7 @@ const ALLOWED_ROOMS = new Set(
 );
 
 const io = new Server(server, {
-  maxHttpBufferSize: MAX_PAYLOAD_BYTES,
+  maxHttpBufferSize: MAX_PAYLOAD_BYTES + 4096,
   serveClient: true,
   cors: { origin: false }
 });
@@ -27,13 +28,13 @@ app.disable("x-powered-by");
 app.use((req, res, next) => {
   res.set({
     "Content-Security-Policy":
-      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: data:; " +
       "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
     "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Permissions-Policy": "camera=(self), microphone=(self), geolocation=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "X-Robots-Tag": "noindex, nofollow",
     "Cache-Control": "no-store"
@@ -68,6 +69,19 @@ setInterval(() => {
   for (const [ip, f] of failures) if (now > f.resetAt) failures.delete(ip);
 }, 60 * 1000).unref();
 
+// ICE servers for calls. STUN works on most networks; set TURN_URL/TURN_USER/TURN_PASS for reliability on strict mobile/CGNAT networks.
+function iceServers() {
+  const list = [{ urls: "stun:stun.l.google.com:19302" }];
+  if (process.env.TURN_URL) {
+    list.push({
+      urls: process.env.TURN_URL.split(",").map((s) => s.trim()),
+      username: process.env.TURN_USER || "",
+      credential: process.env.TURN_PASS || ""
+    });
+  }
+  return list;
+}
+
 // ---- rooms ------------------------------------------------------------------
 // The server only ever sees a hash-derived room id and AES-GCM ciphertext.
 const rooms = new Map(); // roomId -> Set<socketId>
@@ -95,6 +109,8 @@ io.on("connection", (socket) => {
   const ip = clientIp(socket);
   let lastMsg = 0;
   let burst = 0;
+  let sigBurst = 0;
+  let lastSig = 0;
 
   socket.on("join", (roomId) => {
     if (socket.roomId) return;
@@ -116,7 +132,7 @@ io.on("connection", (socket) => {
     set.add(socket.id);
     socket.roomId = roomId;
     socket.join(roomId);
-    socket.emit("joined");
+    socket.emit("joined", { ice: iceServers() });
     presence(roomId);
   });
 
@@ -125,9 +141,19 @@ io.on("connection", (socket) => {
     const now = Date.now();
     burst = now - lastMsg > 5000 ? 0 : burst + 1;
     lastMsg = now;
-    if (burst > 20) return;
+    if (burst > 30) return;
     // Relay to the other person only; sender identity is implied by the connection, never trusted from the client.
     socket.to(socket.roomId).emit("receive-message", payload);
+  });
+
+  // WebRTC call signalling (offers/answers/ICE), end-to-end encrypted like messages.
+  socket.on("signal", (payload) => {
+    if (!socket.roomId || typeof payload !== "string" || payload.length > MAX_SIGNAL_BYTES) return;
+    const now = Date.now();
+    sigBurst = now - lastSig > 5000 ? 0 : sigBurst + 1;
+    lastSig = now;
+    if (sigBurst > 150) return;
+    socket.to(socket.roomId).emit("signal", payload);
   });
 
   socket.on("typing", () => socket.roomId && socket.to(socket.roomId).emit("typing"));

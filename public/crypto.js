@@ -6,7 +6,12 @@ const Crypt = (() => {
   let key = null;
 
   const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
+  const b64 = (buf) => {
+    const bytes = new Uint8Array(buf);
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
   const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
   async function deriveKeys(passphrase) {
