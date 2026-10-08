@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const socket = io({ transports: ["websocket"] });
 
 const MESSAGE_TTL = 5 * 60 * 1000;
-const IDLE_LOCK = 3 * 60 * 1000;
+const IDLE_LOCK = 15 * 60 * 1000; // auto-lock after this much inactivity (also checked on return from background)
 const MAX_VOICE_MS = 60 * 1000;
 const MAX_IMG_DIM = 1280;
 
@@ -13,6 +13,11 @@ let iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
 let typingTimeout;
 let idleTimer;
 let connecting = false;
+let roomId = null;
+let wasJoined = false;
+let lastActive = Date.now();
+let cid = (() => { const a = crypto.getRandomValues(new Uint8Array(16)); return [...a].map((b) => b.toString(16).padStart(2, "0")).join(""); })();
+const SESSION_KEY = "pc-session";
 
 const initial = (n) => (n.trim()[0] || "?").toUpperCase();
 const inChat = () => !$("chat").classList.contains("hidden");
@@ -25,6 +30,22 @@ function toast(msg) {
 }
 
 /* ---------------- login ---------------- */
+$("showPass").addEventListener("click", () => {
+  const show = $("pass").type === "password";
+  $("pass").type = show ? "text" : "password";
+  $("showPass").textContent = show ? "Hide" : "Show";
+});
+// ~100 bits of randomness: share it with her once, privately (in person is best).
+$("genPass").addEventListener("click", async () => {
+  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  const chars = [...bytes].map((b) => alphabet[b % alphabet.length]);
+  const p = [0, 5, 10, 15].map((i) => chars.slice(i, i + 5).join("")).join("-");
+  $("pass").value = p;
+  $("pass").type = "text";
+  $("showPass").textContent = "Hide";
+  try { await navigator.clipboard.writeText(p); toast("Copied — send it to her privately"); } catch { toast("Write it down and share it privately"); }
+});
 $("loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (connecting) return;
@@ -39,10 +60,10 @@ $("loginForm").addEventListener("submit", async (e) => {
   $("error").textContent = "";
   $("connect").textContent = "Securing…";
   try {
-    const roomId = await Crypt.deriveKeys(pass);
+    roomId = await Crypt.deriveKeys(pass);
     myName = name;
     $("pass").value = "";
-    socket.emit("join", roomId);
+    socket.emit("join", { room: roomId, cid });
   } catch (err) {
     fail(err.message);
   }
@@ -54,43 +75,103 @@ function fail(msg) {
   $("connect").textContent = "Connect";
   $("error").textContent = msg;
 }
-socket.on("error-msg", fail);
+socket.on("error-msg", (msg) => {
+  if (wasJoined && inChat()) return toast(msg);
+  wasJoined = false; // a failed restore falls back to the normal login screen
+  try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+  fail(msg);
+});
 
 socket.on("joined", (info) => {
   if (info && Array.isArray(info.ice)) iceServers = info.ice;
   $("login").classList.add("hidden");
   $("chat").classList.remove("hidden");
-  $("message").focus();
-  resetIdle();
+  if (!wasJoined) $("message").focus();
+  wasJoined = true;
+  touch();
+  saveSession();
 });
 
-socket.on("presence", ({ count }) => {
-  peerOnline = count > 1;
-  $("status").classList.toggle("online", peerOnline);
-  $("statusText").textContent = peerOnline ? "Online" : "Partner offline";
-  if (peerOnline) announce();
-  else if (call.state !== "idle") endCall(false, "Partner disconnected");
+// Phones suspend the connection when you switch apps. Quietly rejoin the room when it comes back.
+socket.on("connect", () => {
+  if (wasJoined && roomId) socket.emit("join", { room: roomId, cid });
 });
+socket.on("disconnect", () => {
+  if (!wasJoined) return;
+  peerOnline = false;
+  Crypt.resetSession();
+  renderStatus("Reconnecting…");
+});
+
+socket.on("presence", async ({ count }) => {
+  const was = peerOnline;
+  peerOnline = count > 1;
+  if (!peerOnline) {
+    Crypt.resetSession(); // forget the session keys as soon as she leaves
+    renderStatus("Partner offline");
+    if (call.state !== "idle" && call.state !== "live") endCall(false, "Partner disconnected");
+  } else if (!was) {
+    renderStatus("Securing…");
+    sendKx(); // fresh keys for every session
+  }
+});
+
+async function sendKx() {
+  try { socket.emit("send-message", await Crypt.kxMessage()); } catch {}
+}
+
+// Status line + composer state in one place.
+function renderStatus(text) {
+  const secure = peerOnline && Crypt.isSecure();
+  $("status").classList.toggle("online", secure);
+  $("statusText").textContent = secure ? "Online" : text || (peerOnline ? "Securing…" : "Partner offline");
+  $("verifyBtn").classList.toggle("hidden", !secure);
+  $("message").placeholder = secure ? "Message" : peerOnline ? "Securing connection…" : "Waiting for her to come online…";
+}
+
+// Messages are never queued: if she's offline nothing is delivered, so say so instead of pretending.
+function canSend() {
+  if (!socket.connected) { toast("Reconnecting…"); return false; }
+  if (!peerOnline) { toast("She's offline — not sent"); return false; }
+  if (!Crypt.isSecure()) { toast("Still securing the connection…"); return false; }
+  return true;
+}
+
+socket.on("alert", () => {
+  $("alertBar").classList.remove("hidden");
+  navigator.vibrate && navigator.vibrate([200, 100, 200]);
+});
+$("alertClose").addEventListener("click", () => $("alertBar").classList.add("hidden"));
 
 /* ---------------- messaging ---------------- */
 const send = async (obj) => socket.emit("send-message", await Crypt.encrypt(obj));
-const sendSignal = async (obj) => socket.emit("signal", await Crypt.encrypt(obj));
+const sendSignal = async (obj) => {
+  try { socket.emit("signal", await Crypt.encrypt(obj)); } catch {}
+};
 const announce = () => send({ k: "hello", n: myName });
 
 $("composer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("message").value.trim();
-  if (!text) return;
+  if (!text || !canSend()) return;
   $("message").value = "";
   socket.emit("stop-typing");
   addRow(textBubble(text), true);
   await send({ k: "msg", n: myName, t: text });
-  resetIdle();
+  touch();
 });
 
 socket.on("receive-message", async (payload) => {
+  if (typeof payload === "string" && payload[0] === "{") {
+    // Key exchange message (signed with the passphrase, so the server can't forge it).
+    const r = await Crypt.handleKx(payload).catch(() => null);
+    if (!r) return;
+    if (r.reply) await sendKx();
+    if (r.secure) { renderStatus(); announce(); }
+    return;
+  }
   let m;
-  try { m = await Crypt.decrypt(payload); } catch { return; } // wrong key / tampered: drop
+  try { m = await Crypt.decrypt(payload); } catch { return; } // wrong key / tampered / replayed / reflected: drop
   if (!m || typeof m !== "object") return;
   if (typeof m.n === "string") {
     const n = m.n.slice(0, 24);
@@ -101,6 +182,7 @@ socket.on("receive-message", async (payload) => {
     if (m.k === "hello" && fresh) announce();
   }
   if (m.k === "msg" && typeof m.t === "string") addRow(textBubble(m.t.slice(0, 2000)), false);
+  else if (m.k === "wipe") clearAll();
   else if (m.k === "img") receiveImage(m);
   else if (m.k === "aud") receiveAudio(m);
 });
@@ -122,13 +204,54 @@ function addRow(item, mine) {
   row.append(item.el, time);
   $("messages").appendChild(row);
   $("messages").scrollTop = $("messages").scrollHeight;
-  const remove = () => {
-    row.classList.add("gone");
-    setTimeout(() => { row.remove(); item.cleanup && item.cleanup(); }, 400);
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    row.remove();
+    item.cleanup && item.cleanup();
+    rows.delete(finish);
   };
-  setTimeout(remove, MESSAGE_TTL);
-  return { row, remove };
+  rows.add(finish);
+  setTimeout(() => {
+    row.classList.add("gone");
+    setTimeout(finish, 400);
+  }, MESSAGE_TTL);
+  return { row, finish };
 }
+const rows = new Set();
+
+// Wipe every message from the screen and memory right now.
+function clearAll() {
+  [...rows].forEach((f) => f());
+  $("messages").textContent = "";
+  $("viewer").classList.add("hidden");
+  $("viewerImg").removeAttribute("src");
+}
+
+// "Clear for both": first tap arms the button, second tap wipes both phones.
+let clearArmed = null;
+$("clearBtn").addEventListener("click", async () => {
+  if (!clearArmed) {
+    $("clearBtn").classList.add("armed");
+    toast("Tap again to clear this chat on both phones");
+    clearArmed = setTimeout(() => { clearArmed = null; $("clearBtn").classList.remove("armed"); }, 3000);
+    return;
+  }
+  clearTimeout(clearArmed); clearArmed = null;
+  $("clearBtn").classList.remove("armed");
+  clearAll();
+  if (peerOnline && Crypt.isSecure()) await send({ k: "wipe", n: myName });
+});
+
+// Security code: if both phones show the same digits, nobody is in the middle.
+$("verifyBtn").addEventListener("click", () => {
+  const code = Crypt.safetyCode();
+  if (!code) return;
+  $("codeText").textContent = code;
+  $("codeSheet").classList.remove("hidden");
+});
+$("codeClose").addEventListener("click", () => $("codeSheet").classList.add("hidden"));
 
 $("message").addEventListener("input", () => {
   socket.emit("typing");
@@ -139,18 +262,27 @@ socket.on("typing", () => { $("typing").textContent = `${peerName || "Partner"} 
 socket.on("stop-typing", () => { $("typing").textContent = ""; });
 
 /* ---------------- photos ---------------- */
-$("attach").addEventListener("click", () => $("file").click());
+let viewOnce = false;
+$("onceBtn").addEventListener("click", () => {
+  viewOnce = !viewOnce;
+  $("onceBtn").classList.toggle("on", viewOnce);
+  toast(viewOnce ? "Next photo: view once" : "Photos stay in the chat");
+});
+$("attach").addEventListener("click", () => { if (canSend()) $("file").click(); });
 $("file").addEventListener("change", async () => {
   const f = $("file").files[0];
   $("file").value = "";
   if (!f || !f.type.startsWith("image/")) return;
   try {
     const d = await shrinkImage(f);
-    const once = confirm("Send as view-once photo?\n\nOK = disappears after she opens it\nCancel = normal photo");
+    if (!canSend()) return;
+    const once = viewOnce;
+    viewOnce = false;
+    $("onceBtn").classList.remove("on");
     await send({ k: "img", n: myName, d, once });
     if (once) addRow(onceBubble(null, true), true);
     else addRow(photoBubble(d), true);
-    resetIdle();
+    touch();
   } catch {
     toast("Couldn't send photo");
   }
@@ -226,6 +358,7 @@ let rec = null;
 
 $("mic").addEventListener("click", async () => {
   if (rec) return stopRecording(true);
+  if (!canSend()) return;
   if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Voice notes not supported here");
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -242,9 +375,10 @@ $("mic").addEventListener("click", async () => {
       if (!r.send || !r.chunks.length) return;
       const blob = new Blob(r.chunks, { type: mr.mimeType });
       const d = await blobToDataUrl(blob);
+      if (!canSend()) return;
       await send({ k: "aud", n: myName, d, m: mr.mimeType });
       addRow(audioBubble(blob), true);
-      resetIdle();
+      touch();
     };
     mr.start();
     $("mic").classList.add("rec");
@@ -480,21 +614,60 @@ $("flipBtn").addEventListener("click", async () => {
 });
 
 /* ---------------- lock / privacy ---------------- */
-function lock() {
-  try { endCall(true); socket.emit("logout"); } catch {}
+async function lock() {
+  try {
+    if (call.state !== "idle") { endCall(true); await new Promise((r) => setTimeout(r, 200)); }
+    socket.emit("logout");
+  } catch {}
   Crypt.wipe();
+  try { sessionStorage.removeItem(SESSION_KEY); } catch {}
   location.reload();
 }
 $("logout").addEventListener("click", lock);
 
-function resetIdle() {
-  clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => (call.state === "live" ? resetIdle() : lock()), IDLE_LOCK);
+// Inactivity is measured with the wall clock so it is still correct after the phone suspended our timers.
+function touch() { lastActive = Date.now(); }
+function checkIdle() {
+  if (!inChat() || call.state === "live") return;
+  if (Date.now() - lastActive > IDLE_LOCK) lock();
 }
-["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, () => inChat() && resetIdle(), { passive: true }));
+setInterval(checkIdle, 30 * 1000);
+
+let lastSave = 0;
+function saveSession() {
+  try {
+    const b = Crypt.exportSession();
+    if (b) sessionStorage.setItem(SESSION_KEY, JSON.stringify({ b, n: myName, cid, ts: Date.now() }));
+    lastSave = Date.now();
+  } catch {}
+}
+["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, () => {
+  if (!inChat()) return;
+  touch();
+  if (Date.now() - lastSave > 10000) saveSession();
+}, { passive: true }));
 
 // Hide content in app switcher; don't shield during a call so video keeps showing.
 const shield = (on) => document.body.classList.toggle("shielded", on && call.state !== "live");
-document.addEventListener("visibilitychange", () => shield(document.hidden));
+document.addEventListener("visibilitychange", () => {
+  shield(document.hidden);
+  if (!document.hidden) checkIdle();
+});
 window.addEventListener("blur", () => shield(true));
-window.addEventListener("focus", () => shield(false));
+window.addEventListener("focus", () => { shield(false); checkIdle(); });
+
+// If the OS reloaded the page while it was in the background, pick up where we left off (within the idle window).
+(async function restore() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (!s || Date.now() - s.ts > IDLE_LOCK) return sessionStorage.removeItem(SESSION_KEY);
+    roomId = await Crypt.restoreSession(s.b);
+    myName = s.n;
+    cid = s.cid;
+    wasJoined = true;
+    const go = () => socket.emit("join", { room: roomId, cid });
+    socket.connected ? go() : socket.once("connect", go);
+  } catch { try { sessionStorage.removeItem(SESSION_KEY); } catch {} }
+})();
