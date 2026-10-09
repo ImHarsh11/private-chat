@@ -48,8 +48,7 @@
     </div>
     <button id="voiceCall" class="icon-btn" aria-label="Voice call"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z"/></svg></button>
     <button id="videoCall" class="icon-btn" aria-label="Video call"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="3"/><path d="M16 10l6-3v10l-6-3"/></svg></button>
-    <button id="verifyBtn" class="icon-btn hidden" aria-label="Security code"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z"/><path d="M9 12l2 2 4-4"/></svg></button>
-    <button id="clearBtn" class="icon-btn" aria-label="Clear chat for both"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+    <button id="menuBtn" class="icon-btn" aria-label="More"><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
     <button id="logout" class="icon-btn" aria-label="Lock">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="3"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
     </button>
@@ -92,6 +91,27 @@
     <button id="camBtn" class="call-btn" aria-label="Camera"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="14" height="12" rx="3"/><path d="M16 10l6-3v10l-6-3"/><line class="slash" x1="3" y1="3" x2="21" y2="21"/></svg></button>
     <button id="flipBtn" class="call-btn" aria-label="Flip camera"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/></svg></button>
     <button id="hangup" class="call-btn red" aria-label="End call"><svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M12 9c-3.3 0-6.4 1-8.6 2.8a1.5 1.5 0 0 0-.1 2.2l1.6 1.6a1.5 1.5 0 0 0 1.8.2l2.3-1.3c.4-.2.7-.7.7-1.1V11c1.4-.4 2.9-.4 4.4 0v1.4c0 .4.3.9.7 1.1l2.3 1.3c.6.3 1.3.2 1.8-.2l1.6-1.6a1.5 1.5 0 0 0-.1-2.2C18.4 10 15.3 9 12 9z"/></svg></button>
+  </div>
+</div>
+
+<div id="menu" class="sheet hidden">
+  <div class="sheet-card">
+    <button id="verifyBtn" type="button" class="menu-item">🛡️ <span>Security code</span></button>
+    <button id="pinBtn" type="button" class="menu-item">🔑 <span>Check with PIN</span></button>
+    <button id="notifBtn" type="button" class="menu-item hidden">🔔 <span id="notifLabel">Notifications: off</span></button>
+    <button id="clearBtn" type="button" class="menu-item">🗑️ <span>Clear chat for both</span></button>
+    <button id="menuClose" type="button" class="menu-item cancel">Close</button>
+  </div>
+</div>
+
+<div id="pinSheet" class="overlay hidden">
+  <h2 id="pinTitle">Enter your PIN</h2>
+  <p id="pinText" class="code-help"></p>
+  <input id="pinInput" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="••••••">
+  <div id="pinResult"></div>
+  <div class="pin-actions">
+    <button id="pinCancel" type="button" class="link-btn big">Cancel</button>
+    <button id="pinOk" type="button" class="link-btn big">Continue</button>
   </div>
 </div>
 
