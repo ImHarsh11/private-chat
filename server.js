@@ -1,6 +1,8 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
+const crypto = require("crypto");
+const webpush = require("web-push");
 
 const app = express();
 app.set("trust proxy", 1);
@@ -129,6 +131,53 @@ function iceServers() {
   return list;
 }
 
+// ---- disguised wake-up notifications ----------------------------------------
+// The server can't read messages, so a push can only say "open the app". The text is chosen here from a
+// list of boring shopping-style alerts, never from the client, and never names this app or the sender.
+// VAPID keys are derived from a server secret so they survive restarts without extra setup:
+// set VAPID_PUBLIC/VAPID_PRIVATE yourself, or it uses PUSH_SEED, or your first ALLOWED_ROOMS entry.
+const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+let vapidPublic = null;
+(function setupPush() {
+  try {
+    let pub = process.env.VAPID_PUBLIC;
+    let priv = process.env.VAPID_PRIVATE;
+    if (!pub || !priv) {
+      const seed = process.env.PUSH_SEED || [...ALLOWED_ROOMS][0];
+      if (!seed) return console.warn("Notifications disabled: set ALLOWED_ROOMS (or PUSH_SEED) to enable them.");
+      const d = crypto.createHash("sha256").update("private-chat/vapid/v1|" + seed).digest();
+      const ecdh = crypto.createECDH("prime256v1");
+      ecdh.setPrivateKey(d);
+      pub = b64url(ecdh.getPublicKey());
+      priv = b64url(d);
+    }
+    webpush.setVapidDetails(process.env.PUSH_CONTACT || "mailto:admin@example.com", pub, priv);
+    vapidPublic = pub;
+  } catch (e) {
+    console.warn("Notifications disabled:", e.message);
+  }
+})();
+
+const DISGUISES = [
+  { title: "Order update", body: "Your package is out for delivery" },
+  { title: "Delivery update", body: "Your order has shipped" },
+  { title: "Price drop", body: "An item you viewed is now cheaper" },
+  { title: "Cart reminder", body: "You left something in your cart" },
+  { title: "Flash sale", body: "Deals end tonight — take a look" },
+  { title: "Your order", body: "Tap to see the latest status" }
+];
+// Only real browser push services; stops the server being used to call arbitrary URLs.
+const PUSH_HOST_RE = /(^|\.)(googleapis\.com|push\.services\.mozilla\.com|push\.apple\.com|notify\.windows\.com)$/;
+function validSub(sub) {
+  if (!sub || typeof sub !== "object" || typeof sub.endpoint !== "string" || sub.endpoint.length > 600) return false;
+  const k = sub.keys;
+  if (!k || typeof k.p256dh !== "string" || typeof k.auth !== "string" || k.p256dh.length > 200 || k.auth.length > 100) return false;
+  try {
+    const u = new URL(sub.endpoint);
+    return u.protocol === "https:" && PUSH_HOST_RE.test(u.hostname);
+  } catch { return false; }
+}
+
 io.on("connection", (socket) => {
   const ip = clientIp(socket);
   let lastMsg = 0;
@@ -182,7 +231,7 @@ io.on("connection", (socket) => {
     set.set(socket.id, cid);
     socket.roomId = roomId;
     socket.join(roomId);
-    socket.emit("joined", { ice: iceServers() });
+    socket.emit("joined", { ice: iceServers(), push: vapidPublic });
     presence(roomId);
   });
 
@@ -207,6 +256,19 @@ io.on("connection", (socket) => {
     lastSig = now;
     if (sigBurst > 150) return;
     socket.to(socket.roomId).emit("signal", payload);
+  });
+
+  // "Nudge" the other person's phone with a disguised notification. The subscription comes from the sender's
+  // device (she shared it with them over the encrypted channel), so the server stores nothing.
+  socket.on("wake", async (sub) => {
+    if (!socket.roomId || !vapidPublic || !validSub(sub)) return;
+    if (over("wake:" + socket.id, 6, WINDOW) || over("wake-room:" + socket.roomId, 20, 60 * 60 * 1000)) return;
+    const d = DISGUISES[crypto.randomInt(DISGUISES.length)];
+    try {
+      await webpush.sendNotification(sub, JSON.stringify(d), { TTL: 600, urgency: "high" });
+    } catch (e) {
+      if (e && (e.statusCode === 404 || e.statusCode === 410)) socket.emit("wake-gone");
+    }
   });
 
   socket.on("typing", () => {

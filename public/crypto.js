@@ -144,12 +144,27 @@ const Crypt = (() => {
     return m;
   }
 
+  /* ---------- PIN check ---------- */
+  // A PIN agreed in person (different from the passphrase). Neither the PIN nor anything reusable is stored:
+  // the answer is an HMAC over a fresh challenge and this session's security code.
+  async function pinKey(pin) {
+    const base = await subtle.importKey("raw", enc.encode("pin|" + pin), "PBKDF2", false, ["deriveBits"]);
+    const bits = await subtle.deriveBits(
+      { name: "PBKDF2", hash: "SHA-256", salt: enc.encode("private-chat/pin/v1"), iterations: 300000 }, base, 256);
+    return subtle.importKey("raw", bits, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  }
+  const pinInput = (nonce) => enc.encode(`pin-resp|${nonce}|${safety}`);
+  const pinNonce = () => b64(rand(16));
+  const pinProof = async (key, nonce) => b64(await subtle.sign("HMAC", key, pinInput(nonce)));
+  const pinCheck = (key, nonce, proof) => subtle.verify("HMAC", key, unb64(proof), pinInput(nonce)).catch(() => false);
+
   const wipe = () => { resetSession(); rawBits = null; msBytes = null; macKey = null; };
 
   return {
     deriveKeys, exportSession, restoreSession,
     ensureHandshake, kxMessage, handleKx, resetSession,
     encrypt, decrypt, wipe,
+    pinKey, pinNonce, pinProof, pinCheck,
     isSecure: () => !!sessionKey,
     safetyCode: () => safety
   };

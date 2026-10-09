@@ -84,6 +84,7 @@ socket.on("error-msg", (msg) => {
 
 socket.on("joined", (info) => {
   if (info && Array.isArray(info.ice)) iceServers = info.ice;
+  if (info) { pushKey = info.push || null; renderNotif(); }
   $("login").classList.add("hidden");
   $("chat").classList.remove("hidden");
   if (!wasJoined) $("message").focus();
@@ -125,17 +126,36 @@ function renderStatus(text) {
   const secure = peerOnline && Crypt.isSecure();
   $("status").classList.toggle("online", secure);
   $("statusText").textContent = secure ? "Online" : text || (peerOnline ? "Securing…" : "Partner offline");
-  $("verifyBtn").classList.toggle("hidden", !secure);
-  $("message").placeholder = secure ? "Message" : peerOnline ? "Securing connection…" : "Waiting for her to come online…";
+  $("verifyBtn").disabled = !secure;
+  $("pinBtn").disabled = !secure;
+  $("message").placeholder = secure ? "Message" : peerOnline ? "Securing connection…" : "She's offline — message will wait";
 }
 
-// Messages are never queued: if she's offline nothing is delivered, so say so instead of pretending.
-function canSend() {
-  if (!socket.connected) { toast("Reconnecting…"); return false; }
-  if (!peerOnline) { toast("She's offline — not sent"); return false; }
-  if (!Crypt.isSecure()) { toast("Still securing the connection…"); return false; }
-  return true;
+// Messages are never stored on the server. If she's offline they wait on THIS phone (marked "waiting"), she gets a
+// disguised nudge, and they are delivered the moment she is back and the connection is secure.
+const outbox = [];
+const OUTBOX_TTL = 10 * 60 * 1000;
+const canDeliverNow = () => socket.connected && peerOnline && Crypt.isSecure();
+
+async function deliver(obj, item) {
+  const { row } = addRow(item, true);
+  if (canDeliverNow()) return send(obj);
+  row.classList.add("pending");
+  outbox.push({ obj, row, ts: Date.now() });
+  wakePartner();
 }
+
+async function flushOutbox() {
+  for (const o of outbox.splice(0)) {
+    if (Date.now() - o.ts > OUTBOX_TTL) { o.row.classList.replace("pending", "failed"); continue; }
+    try { await send(o.obj); o.row.classList.remove("pending"); } catch { o.row.classList.replace("pending", "failed"); }
+  }
+}
+setInterval(() => {
+  for (let i = outbox.length - 1; i >= 0; i--) {
+    if (Date.now() - outbox[i].ts > OUTBOX_TTL) { outbox[i].row.classList.replace("pending", "failed"); outbox.splice(i, 1); }
+  }
+}, 15000);
 
 socket.on("alert", () => {
   $("alertBar").classList.remove("hidden");
@@ -153,11 +173,10 @@ const announce = () => send({ k: "hello", n: myName });
 $("composer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = $("message").value.trim();
-  if (!text || !canSend()) return;
+  if (!text) return;
   $("message").value = "";
   socket.emit("stop-typing");
-  addRow(textBubble(text), true);
-  await send({ k: "msg", n: myName, t: text });
+  await deliver({ k: "msg", n: myName, t: text }, textBubble(text));
   touch();
 });
 
@@ -167,7 +186,7 @@ socket.on("receive-message", async (payload) => {
     const r = await Crypt.handleKx(payload).catch(() => null);
     if (!r) return;
     if (r.reply) await sendKx();
-    if (r.secure) { renderStatus(); announce(); }
+    if (r.secure) { renderStatus(); announce(); flushOutbox(); syncPush(); }
     return;
   }
   let m;
@@ -183,6 +202,11 @@ socket.on("receive-message", async (payload) => {
   }
   if (m.k === "msg" && typeof m.t === "string") addRow(textBubble(m.t.slice(0, 2000)), false);
   else if (m.k === "wipe") clearAll();
+  else if (m.k === "sub") storePartnerSub(m.sub);
+  else if (m.k === "pin-ask") onPinAsk(m);
+  else if (m.k === "pin-resp") onPinResp(m);
+  else if (m.k === "pin-deny") pinFinish("🚫", `${peerName || "She"} declined to answer.`);
+  else if (m.k === "pin-result") onPinResult(m);
   else if (m.k === "img") receiveImage(m);
   else if (m.k === "aud") receiveAudio(m);
 });
@@ -241,6 +265,7 @@ $("clearBtn").addEventListener("click", async () => {
   clearTimeout(clearArmed); clearArmed = null;
   $("clearBtn").classList.remove("armed");
   clearAll();
+  $("menu").classList.add("hidden");
   if (peerOnline && Crypt.isSecure()) await send({ k: "wipe", n: myName });
 });
 
@@ -249,6 +274,7 @@ $("verifyBtn").addEventListener("click", () => {
   const code = Crypt.safetyCode();
   if (!code) return;
   $("codeText").textContent = code;
+  $("menu").classList.add("hidden");
   $("codeSheet").classList.remove("hidden");
 });
 $("codeClose").addEventListener("click", () => $("codeSheet").classList.add("hidden"));
@@ -268,20 +294,17 @@ $("onceBtn").addEventListener("click", () => {
   $("onceBtn").classList.toggle("on", viewOnce);
   toast(viewOnce ? "Next photo: view once" : "Photos stay in the chat");
 });
-$("attach").addEventListener("click", () => { if (canSend()) $("file").click(); });
+$("attach").addEventListener("click", () => $("file").click());
 $("file").addEventListener("change", async () => {
   const f = $("file").files[0];
   $("file").value = "";
   if (!f || !f.type.startsWith("image/")) return;
   try {
     const d = await shrinkImage(f);
-    if (!canSend()) return;
     const once = viewOnce;
     viewOnce = false;
     $("onceBtn").classList.remove("on");
-    await send({ k: "img", n: myName, d, once });
-    if (once) addRow(onceBubble(null, true), true);
-    else addRow(photoBubble(d), true);
+    await deliver({ k: "img", n: myName, d, once }, once ? onceBubble(null, true) : photoBubble(d));
     touch();
   } catch {
     toast("Couldn't send photo");
@@ -358,7 +381,6 @@ let rec = null;
 
 $("mic").addEventListener("click", async () => {
   if (rec) return stopRecording(true);
-  if (!canSend()) return;
   if (!navigator.mediaDevices || !window.MediaRecorder) return toast("Voice notes not supported here");
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -375,9 +397,7 @@ $("mic").addEventListener("click", async () => {
       if (!r.send || !r.chunks.length) return;
       const blob = new Blob(r.chunks, { type: mr.mimeType });
       const d = await blobToDataUrl(blob);
-      if (!canSend()) return;
-      await send({ k: "aud", n: myName, d, m: mr.mimeType });
-      addRow(audioBubble(blob), true);
+      await deliver({ k: "aud", n: myName, d, m: mr.mimeType }, audioBubble(blob));
       touch();
     };
     mr.start();
@@ -612,6 +632,183 @@ $("flipBtn").addEventListener("click", async () => {
     $("localVideo").style.transform = facing === "user" ? "scaleX(-1)" : "none";
   } catch { toast("Couldn't switch camera"); }
 });
+
+/* ---------------- menu ---------------- */
+$("menuBtn").addEventListener("click", () => $("menu").classList.remove("hidden"));
+$("menuClose").addEventListener("click", () => $("menu").classList.add("hidden"));
+$("menu").addEventListener("click", (e) => { if (e.target === $("menu")) $("menu").classList.add("hidden"); });
+
+/* ---------------- disguised notifications ---------------- */
+const PARTNER_SUB_KEY = "pc-partner-sub";
+const VAPID_KEY = "pc-vapid";
+let pushKey = null;      // server's public key (null = notifications unavailable)
+let lastWake = 0;
+
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const b64urlToBytes = (b) => Uint8Array.from(atob(b.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(b.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+function renderNotif() {
+  const visible = pushKey && pushSupported();
+  $("notifBtn").classList.toggle("hidden", !visible);
+  if (visible) $("notifLabel").textContent = "Notifications: " + (Notification.permission === "granted" && localStorage.getItem("pc-push-on") === "1" ? "on" : "off");
+}
+
+async function mySubscription(create) {
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  // The key changes if the passphrase (and so the server's room id) changed: start over.
+  if (sub && localStorage.getItem(VAPID_KEY) !== pushKey) { await sub.unsubscribe(); sub = null; }
+  if (!sub && create) {
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(pushKey) });
+    localStorage.setItem(VAPID_KEY, pushKey);
+  }
+  return sub;
+}
+
+// Give her phone's address to me (and mine to her) over the encrypted channel, so either of us can nudge the other.
+async function syncPush() {
+  if (!pushKey || !pushSupported() || localStorage.getItem("pc-push-on") !== "1" || Notification.permission !== "granted") return;
+  try {
+    const sub = await mySubscription(true);
+    if (sub && canDeliverNow()) await send({ k: "sub", n: myName, sub: sub.toJSON() });
+  } catch {}
+}
+
+function storePartnerSub(sub) {
+  try {
+    if (!sub) return localStorage.removeItem(PARTNER_SUB_KEY);
+    if (typeof sub.endpoint !== "string" || !sub.keys) return;
+    localStorage.setItem(PARTNER_SUB_KEY, JSON.stringify({ sub: { endpoint: sub.endpoint, keys: { p256dh: String(sub.keys.p256dh), auth: String(sub.keys.auth) } }, key: pushKey }));
+  } catch {}
+}
+
+function wakePartner() {
+  if (Date.now() - lastWake < 60 * 1000 || !socket.connected) return;
+  try {
+    const p = JSON.parse(localStorage.getItem(PARTNER_SUB_KEY) || "null");
+    if (!p || p.key !== pushKey) return;
+    lastWake = Date.now();
+    socket.emit("wake", p.sub);
+  } catch {}
+}
+socket.on("wake-gone", () => { try { localStorage.removeItem(PARTNER_SUB_KEY); } catch {} });
+
+$("notifBtn").addEventListener("click", async () => {
+  const on = localStorage.getItem("pc-push-on") === "1" && Notification.permission === "granted";
+  try {
+    if (on) {
+      localStorage.setItem("pc-push-on", "0");
+      const sub = await mySubscription(false);
+      if (sub) await sub.unsubscribe();
+      if (canDeliverNow()) await send({ k: "sub", n: myName, sub: null });
+      toast("Notifications off");
+    } else {
+      const isiOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (isiOS && !navigator.standalone) { toast("On iPhone: Share → Add to Home Screen first"); return; }
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { toast("Notifications blocked in settings"); return; }
+      localStorage.setItem("pc-push-on", "1");
+      await syncPush();
+      toast("Notifications on — they look like shop alerts");
+    }
+  } catch { toast("Couldn't change notifications"); }
+  renderNotif();
+});
+
+/* ---------------- PIN check ---------------- */
+// A PIN you both agreed in person (different from the passphrase). Either of you can ask the other for it
+// if you suspect someone else is on the other end. Nothing about the PIN is stored anywhere.
+let pin = { mode: null, key: null, nonce: null, timer: null };
+let pinAsks = [];
+const pinOpen = (title, text) => {
+  $("pinTitle").textContent = title;
+  $("pinText").textContent = text;
+  $("pinInput").value = "";
+  $("pinInput").classList.remove("hidden");
+  $("pinResult").textContent = "";
+  $("pinOk").textContent = "Continue";
+  $("pinCancel").classList.remove("hidden");
+  $("menu").classList.add("hidden");
+  $("pinSheet").classList.remove("hidden");
+  setTimeout(() => $("pinInput").focus(), 50);
+};
+function pinFinish(icon, text) {
+  clearTimeout(pin.timer);
+  pin = { mode: "result", key: null, nonce: null, timer: null };
+  $("pinTitle").textContent = "PIN check";
+  $("pinText").textContent = text;
+  $("pinResult").textContent = icon;
+  $("pinInput").classList.add("hidden");
+  $("pinCancel").classList.add("hidden");
+  $("pinOk").textContent = "Done";
+  $("pinSheet").classList.remove("hidden");
+  navigator.vibrate && navigator.vibrate(icon === "✅" ? 80 : [150, 80, 150]);
+}
+
+$("pinBtn").addEventListener("click", () => {
+  if (!canDeliverNow()) return toast("She needs to be online");
+  pin = { mode: "ask", key: null, nonce: null, timer: null };
+  pinOpen("Check it's really her", "Enter your PIN. She'll be asked for hers. Only a matching PIN passes. Never type your PIN into the chat.");
+});
+$("pinCancel").addEventListener("click", async () => {
+  const mode = pin.mode;
+  $("pinSheet").classList.add("hidden");
+  clearTimeout(pin.timer);
+  pin = { mode: null, key: null, nonce: null, timer: null };
+  if (mode === "answer" && canDeliverNow()) await send({ k: "pin-deny", n: myName });
+});
+$("pinOk").addEventListener("click", async () => {
+  if (pin.mode === "result") { $("pinSheet").classList.add("hidden"); pin.mode = null; return; }
+  const v = $("pinInput").value.trim();
+  if (!/^\d{4,6}$/.test(v)) return toast("PIN is 4 to 6 digits");
+  $("pinOk").disabled = true;
+  try {
+    const key = await Crypt.pinKey(v);
+    $("pinInput").value = "";
+    if (pin.mode === "ask") {
+      pin.key = key;
+      pin.nonce = Crypt.pinNonce();
+      $("pinSheet").classList.add("hidden");
+      toast("Asking her for the PIN…");
+      pin.timer = setTimeout(() => pinFinish("⏱️", "No answer. She may not be at her phone."), 60000);
+      await send({ k: "pin-ask", n: myName, nonce: pin.nonce });
+    } else if (pin.mode === "answer") {
+      const proof = await Crypt.pinProof(key, pin.nonce);
+      $("pinSheet").classList.add("hidden");
+      pin = { mode: "waiting", key: null, nonce: null, timer: null };
+      await send({ k: "pin-resp", n: myName, proof });
+    }
+  } catch { toast("Couldn't check the PIN"); }
+  $("pinOk").disabled = false;
+});
+
+function onPinAsk(m) {
+  const now = Date.now();
+  pinAsks = pinAsks.filter((t) => now - t < 10 * 60 * 1000);
+  if (pinAsks.length >= 3 || typeof m.nonce !== "string" || m.nonce.length > 40 || (pin.mode && pin.mode !== "result")) return; // flood / busy
+  pinAsks.push(now);
+  pin = { mode: "answer", key: null, nonce: m.nonce, timer: null };
+  pinOpen(`${peerName || "She"} is checking it's you`, "Enter your PIN to prove it. If you weren't expecting this, tap Cancel.");
+  navigator.vibrate && navigator.vibrate([200, 100, 200]);
+}
+
+async function onPinResp(m) {
+  if (pin.mode !== "ask" || !pin.key || typeof m.proof !== "string") return;
+  const ok = await Crypt.pinCheck(pin.key, pin.nonce, m.proof);
+  await send({ k: "pin-result", n: myName, ok });
+  pinFinish(ok ? "✅" : "❌", ok
+    ? `${peerName || "She"} knows the PIN. It's really them.`
+    : `The PIN did NOT match. This may not be ${peerName || "her"}. Stop sharing anything private, and change your passphrase.`);
+}
+
+function onPinResult(m) {
+  if (pin.mode !== "waiting") return;
+  pinFinish(m.ok ? "✅" : "❌", m.ok
+    ? `${peerName || "She"} confirmed you with the PIN.`
+    : `${peerName || "She"} says your PIN did not match.`);
+}
 
 /* ---------------- lock / privacy ---------------- */
 async function lock() {

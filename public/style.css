@@ -202,3 +202,28 @@ header .icon-btn { width: 34px; height: 34px; border-radius: 12px; }
 header .icon-btn svg { width: 18px; height: 18px; }
 .who { margin-right: 2px; }
 #status { white-space: nowrap; }
+
+/* Menu sheet + PIN check */
+.sheet { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center; }
+.sheet.hidden { display: none; }
+.sheet-card {
+  width: 100%; max-width: 520px; padding: 10px 14px max(14px, env(safe-area-inset-bottom));
+  background: #12151c; border: 1px solid var(--line); border-radius: 24px 24px 0 0; display: flex; flex-direction: column; gap: 6px;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 15px 14px; border: 0; border-radius: 14px;
+  background: rgba(255,255,255,.05); color: var(--text); font-size: 16px; text-align: left; cursor: pointer;
+}
+.menu-item:disabled { opacity: .4; }
+.menu-item.hidden { display: none; }
+.menu-item.cancel { justify-content: center; color: var(--muted); background: none; }
+.menu-item.armed { background: #ef4444; }
+.pin-input {
+  width: 220px; margin-top: 22px; text-align: center; font-size: 30px; letter-spacing: .5em; padding: 14px 8px 14px 20px;
+}
+.pin-actions { display: flex; gap: 40px; justify-content: center; }
+#pinResult { font-size: 54px; margin-top: 10px; min-height: 10px; }
+#pinResult:empty { display: none; }
+.msg.pending { opacity: .6; }
+.msg.pending .time::after { content: " · waiting for her"; }
+.msg.failed .time::after { content: " · not delivered"; color: #fb7185; }
